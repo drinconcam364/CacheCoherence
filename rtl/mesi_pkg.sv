@@ -81,7 +81,7 @@ package mesi_pkg;
 
   // ------------------------------------------------------------------
   // 6. Memory per-block states (Sorin Table 7.12)
-  //    The D-suffixed transients (I^D, S^D, EorM^D) live in bus.sv's FSM.
+  //    The D-suffixed transients (I^D, S^D, EorM^D) live in mem_ctrl.sv's transaction register.
   // ------------------------------------------------------------------
   typedef enum logic [1:0] {
     MEM_I    = 2'b00,

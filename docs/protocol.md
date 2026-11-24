@@ -39,7 +39,7 @@ If this file disagrees with Sorin's tables, Sorin wins. Fix this file.
 | I, S, E, M | ST_I, ST_S, ST_E, ST_M (`mesi_t`) |
 | IS^AD, IS^D, IM^AD, IM^D, SM^AD, SM^D, MI^A, EI^A, II^A | TR_IS_AD, TR_IS_D, TR_IM_AD, TR_IM_D, TR_SM_AD, TR_SM_D, TR_MI_A, TR_EI_A, TR_II_A (`trans_t`) |
 | Memory I, S, EorM | MEM_I, MEM_S, MEM_EORM (`mem_state_t`) |
-| Memory I^D, S^D, EorM^D | States of the FSM in `bus.sv` (not stored per block) |
+| Memory I^D, S^D, EorM^D | Held in `mem_ctrl.sv`'s transaction register (not stored per block) |
 | GetS, GetM, PutM | CMD_GETS, CMD_GETM, CMD_PUTM (`bus_cmd_t`) |
 | Data, NoData, NoData-E | PUT_DATA, PUT_NODATA, PUT_NODATA_E (`put_t`) |
 

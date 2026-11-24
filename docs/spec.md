@@ -125,7 +125,10 @@ Memory keeps **2 bits per block** (Figure 7.5 / Table 7.12):
 - Silent S evictions mean memory may say S when no cache actually holds the block. That's safe:
   a later GetS just gets S instead of E.
 - **Transient memory states** (I^D, S^D, EorM^D: "waiting for data after a PutM or owner GetS")
-  are held in the bus sequencer, not per block, because the atomic bus allows only one at a time.
+  are held in `mem_ctrl.sv`'s transaction register, not per block, because the atomic bus allows
+  only one at a time. The register latches the command, put kind, block index and the block's state
+  at the address phase; e.g. `cmd_q` = PutM with `st_q` = EorM is EorM^D. The per-block state is
+  updated once, at `bus_done`.
 
 ## 4. Protocol
 
@@ -178,6 +181,14 @@ outputs, and `bus.sv` muxes the granted cache's request onto the shared `bus_*` 
 | cache_dval[i] | 1 | Cache i is driving `cache_data[i]` this cycle (owner response, or its own PutM data) |
 | cache_data[i] | LINE_W | Cache i's outgoing line |
 
+- **Request timing:** `bus.sv` latches the granted cache's `cache_cmd`, `cache_addr` and
+  `cache_put_kind` at the end of the grant cycle G and holds them on `bus_cmd` / `bus_addr` /
+  `bus_put_kind` until `bus_done`. So a cache must drive valid values on all three **for as long as
+  its `bus_req` is high, including cycle G**, and `cache_cmd` must not be CMD_NONE then (asserted in
+  `bus.sv`). From G+1 on, the cache may change them (e.g. when its pending state moves on at the
+  Own-* event); the bus no longer looks at them. Before the grant they may change, e.g. a PutM's
+  `cache_put_kind` goes PUT_DATA → PUT_NODATA when MI^A becomes II^A.
+
 ### 6.3 Memory controller → bus.sv
 
 | Signal | Width | Meaning |
@@ -210,7 +221,8 @@ a cache owner will respond (`mem_owned`).
 changes (e.g. SNOOP_LAT), only `bus.sv` changes.
 
 - **Who drives `bus_addr_valid`, `bus_snoop_end`, `bus_data_valid`, `bus_data_excl`, `bus_done`:**
-  the sequencer in `bus.sv`, which also holds memory's transient state (I^D / S^D / EorM^D) during a PutM.
+  the sequencer in `bus.sv`. Memory's transient state (I^D / S^D / EorM^D) is held in `mem_ctrl.sv`,
+  not here (Section 3.3).
 - **Data mux select:**
   1. `bus_cmd == CMD_PUTM` with `bus_put_kind == PUT_DATA`: the **requester's** line (`cache_data[i]` of the granted cache).
   2. GetS / GetM with `mem_owned == 1`: the **owner cache's** line (the cache whose `cache_dval` is high;
@@ -274,3 +286,5 @@ GetM from memory, GetM from an owner cache, PutM with Data / NoData-E / NoData.
 | | Initial draft | |
 | 2026-11-24 | Switched protocol to Sorin Tables 7.11 / 7.12: GetS/GetM/PutM, no BusUpgr, no shared/owner wires, per-block memory state, E is an owner and evicts with PutM, transient states listed | |
 | 2026-11-24 | Bus interface matched to `rtl/top.sv`: per-cache `cache_cmd` / `cache_addr` / `cache_put_kind` muxed by bus.sv; added `bus_addr_valid`, `bus_snoop_end`, `bus_put_kind`, and memory outputs `mem_dval` / `mem_data` / `mem_excl` / `mem_owned`. Enum names now match `mesi_pkg.sv` (ST_, TR_, MEM_, CMD_, PUT_, OP_ prefixes) | |
+| 2026-11-24 | Memory transient states (I^D / S^D / EorM^D) moved from `bus.sv` to `mem_ctrl.sv`'s transaction register; per-block state updates at `bus_done` | Person B |
+| 2026-11-24 | Section 6.2: request timing rule. Cache's `cache_cmd` / `cache_addr` / `cache_put_kind` must be valid while `bus_req` is high, through grant cycle G; `bus.sv` latches them at the end of G | Person B |
