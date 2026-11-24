@@ -85,7 +85,7 @@ module cache
     end
   end
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)
       array_read_state <= ST_I;
     else if (array_read_enable)
@@ -111,7 +111,7 @@ module cache
     if (data_array_write_enable) data_array[array_write_index] <= array_write_data;
   end
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int set = 0; set < N_SETS; set++)
         state_array[set] <= ST_I;
@@ -161,7 +161,7 @@ module cache
   controller_state_t controller_state;          // current state (flip-flops)
   controller_state_t controller_state_next;     // next state (combinational)
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) controller_state <= CTRL_IDLE;
     else        controller_state <= controller_state_next;
   end
@@ -265,9 +265,10 @@ module cache
   assign own_eviction_done   = bus_gnt && bus_done && pending_is_eviction;
   assign pending_needs_grant = pending_waiting_for_address || pending_is_eviction;
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pending_transient_state <= TR_NONE;
+      pending_line_addr       <= '0;            // async reset: every flop in the block gets one
     end else if (starting_miss) begin
       if (victim_is_dirty) begin                // transaction 1: PutM the victim
         pending_transient_state <= TR_MI_A;
@@ -310,7 +311,7 @@ module cache
   logic snoop_end_was_last_cycle;               // bus_snoop_end was 1 one cycle ago
   logic eviction_data_cycle;                    // drive our PutM data this cycle
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) snoop_end_was_last_cycle <= 1'b0;
     else        snoop_end_was_last_cycle <= bus_snoop_end;
   end
@@ -408,7 +409,7 @@ module cache
   assign finishing_hit  = (controller_state == CTRL_LOOKUP) && request_hit;
   assign finishing_miss = (controller_state == CTRL_WAIT_BUS) && own_data_arrived;
 
-  always_ff @(posedge clk) begin
+  always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) resp_valid_reg <= 1'b0;
     else        resp_valid_reg <= finishing_hit || finishing_miss;
   end
