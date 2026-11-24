@@ -8,7 +8,7 @@
 >
 > **Protocol source of truth:** Sorin, Hill & Wood, *A Primer on Memory Consistency and Cache
 > Coherence*, Section 7.3 (MESI snooping): Figure 7.4, Figure 7.5, Table 7.11, Table 7.12.
-> Section 4 below transcribes those tables. If anything here disagrees with them, the tables win.
+> `docs/protocol.md` transcribes those tables. If anything here disagrees with them, the tables win.
 >
 > Items marked **(proposed)** are implementation choices to discuss before signing off.
 
@@ -83,7 +83,7 @@ localparam int LINE_W     = LINE_BYTES*8;                     // 256
 
 - **Fields stored per line:** tag (TAG_W bits), stable MESI state (2 bits), data (256 bits).
   For 2-way, add 1 LRU bit per set.
-- **Stable state encoding (proposed):** I = `2'b00`, S = `2'b01`, E = `2'b10`, M = `2'b11`.
+- **Stable state encoding** (`mesi_t` in `mesi_pkg.sv`): ST_I = `2'b00`, ST_S = `2'b01`, ST_E = `2'b10`, ST_M = `2'b11`.
   I must be `00` so reset leaves every line invalid.
 - **Why no separate valid/dirty bits:** valid ⇔ state ≠ I, and dirty ⇔ state = M.
 - **Reset:** every line in every cache is I.
@@ -100,7 +100,7 @@ So transient states are **not** stored per line. Instead, the controller keeps o
 | `pend_valid` | A transaction is in progress |
 | `pend_addr` | Its line address |
 | `pend_way` | Which way it will install into / evict from (2-way only) |
-| `pend_state` | The transient state (`trans_t` enum: IS_AD, IS_D, IM_AD, IM_D, SM_AD, SM_D, MI_A, EI_A, II_A) |
+| `pend_state` | The transient state (`trans_t` in `mesi_pkg.sv`: TR_NONE, TR_IS_AD, TR_IS_D, TR_IM_AD, TR_IM_D, TR_SM_AD, TR_SM_D, TR_MI_A, TR_EI_A, TR_II_A) |
 
 - While `pend_valid`, the array line can still hold its old stable state (S during SM^AD,
   M during MI^A, E during EI^A). It gets the new stable state when the transaction completes.
@@ -119,7 +119,7 @@ Memory keeps **2 bits per block** (Figure 7.5 / Table 7.12):
 | S | Zero or more caches may hold it in S. Memory is the owner and up to date |
 | EorM | Exactly one cache holds it in E or M and is the owner. Memory may be stale |
 
-- **Encoding (proposed):** I = `2'b00`, S = `2'b01`, EorM = `2'b10`. **Reset:** every block I.
+- **Encoding** (`mem_state_t` in `mesi_pkg.sv`): MEM_I = `2'b00`, MEM_S = `2'b01`, MEM_EORM = `2'b10`. **Reset:** every block MEM_I.
 - Memory can't tell E from M. That's why E evictions send **NoData-E** (memory → I) and M
   evictions send **Data** (memory writes, → I).
 - Silent S evictions mean memory may say S when no cache actually holds the block. That's safe:
@@ -127,86 +127,11 @@ Memory keeps **2 bits per block** (Figure 7.5 / Table 7.12):
 - **Transient memory states** (I^D, S^D, EorM^D: "waiting for data after a PutM or owner GetS")
   are held in the bus sequencer, not per block, because the atomic bus allows only one at a time.
 
-## 4. Protocol tables
+## 4. Protocol
 
-Transcribed from Sorin Tables 7.11 and 7.12. `—` = no action, no state change.
-`(A)` = impossible because the bus is atomic (assert it never happens).
-`n/a` = impossible for other reasons (shaded blank in Sorin). `X/Y` = do X, go to state Y.
-
-### 4.1 Event meanings in this design
-
-| Sorin event | What it means in this RTL |
-|---|---|
-| Load / Store | Core request from the traffic generator |
-| Replacement | The cache must evict a valid line to make room for a miss |
-| Own-GetS / Own-GetM / Own-PutM | This cache's own request reaches the address phase on the bus (it's now ordered) |
-| Other-GetS / Other-GetM / Other-PutM | Another cache's request is in the address phase. This cache snoops it |
-| Own Data Response | Data for this cache's GetS/GetM appears on the bus (`bus_data_valid`, `bus_data_excl` = 0) |
-| Own Data Response (exclusive) | Same, with `bus_data_excl` = 1 (memory responded to a GetS from state I) |
-| Stall | Hold `req_ready` low. Don't process the core request yet |
-
-### 4.2 Cache controller (Sorin Table 7.11)
-
-| State | Load | Store | Replacement | Own-GetS | Own-GetM | Own-PutM | Other-GetS | Other-GetM | Other-PutM | Own Data Resp | Own Data Resp (excl) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| **I** | Issue GetS / IS^AD | Issue GetM / IM^AD | n/a | n/a | n/a | n/a | — | — | — | n/a | n/a |
-| **IS^AD** | Stall | Stall | Stall | — / IS^D | n/a | n/a | — | — | — | n/a | n/a |
-| **IS^D** | Stall | Stall | Stall | n/a | n/a | n/a | (A) | (A) | (A) | — / S | — / E |
-| **IM^AD** | Stall | Stall | Stall | n/a | — / IM^D | n/a | — | — | — | n/a | n/a |
-| **IM^D** | Stall | Stall | Stall | n/a | n/a | n/a | (A) | (A) | (A) | — / M | n/a |
-| **S** | Hit | Issue GetM / SM^AD | — / I (silent) | n/a | n/a | n/a | — | — / I | — | n/a | n/a |
-| **SM^AD** | Hit | Stall | Stall | n/a | — / SM^D | n/a | — | — / IM^AD | — | n/a | n/a |
-| **SM^D** | Hit | Stall | Stall | n/a | n/a | n/a | (A) | (A) | n/a | — / M | n/a |
-| **E** | Hit | Hit / M (silent) | Issue PutM / EI^A | n/a | n/a | n/a | Send data to requester and memory / S | Send data to requester / I | — | n/a | n/a |
-| **M** | Hit | Hit | Issue PutM / MI^A | n/a | n/a | n/a | Send data to requester and memory / S | Send data to requester / I | — | n/a | n/a |
-| **MI^A** | Hit | Hit | Stall | n/a | n/a | Send Data to memory / I | Send data to requester and memory / II^A | Send data to requester / II^A | — | n/a | n/a |
-| **EI^A** | Hit | Stall | Stall | n/a | n/a | Send NoData-E to memory / I | Send data to requester and memory / II^A | Send data to requester / II^A | — | n/a | n/a |
-| **II^A** | Stall | Stall | Stall | n/a | n/a | Send NoData to memory / I | — | — | — | n/a | n/a |
-
-Notes for this design:
-- Because cores are blocking, the Load/Store "Hit" entries in **SM^AD, SM^D, MI^A, EI^A** never
-  actually happen: the core that started the transaction is waiting for it. Treat them as Stall.
-  (They'd matter if you later add a non-blocking core.)
-- **Other-PutM is always `—`.** A snooper never reacts to another cache's eviction.
-- In SM^AD, the data response for the GetM comes from memory (memory is in S). The cache can
-  overwrite its line with it; the data is identical.
-
-### 4.3 Memory controller (Sorin Table 7.12)
-
-| State | GetS | GetM | PutM | Data | NoData | NoData-E |
-|---|---|---|---|---|---|---|
-| **I** | Send data to requester (exclusive) / EorM | Send data to requester / EorM | — / I^D | n/a | n/a | n/a |
-| **S** | Send data to requester | Send data to requester / EorM | — / S^D | n/a | n/a | n/a |
-| **EorM** | — / S^D (owner sends data; memory captures it) | — (owner sends data) | — / EorM^D | n/a | n/a | n/a |
-| **I^D** | (A) | (A) | (A) | Write data to memory / I | — / I | — / I |
-| **S^D** | (A) | (A) | (A) | Write data to memory / S | — / S | — / S |
-| **EorM^D** | (A) | (A) | (A) | Write data to memory / I | — / EorM | — / I |
-
-- In EorM^D, **NoData** → EorM is the case where the evicting cache lost ownership (II^A)
-  to another cache's GetM before its PutM was ordered. The new owner still holds the block.
-- In EorM, a GetS moves memory to S^D. The data the owner sends counts as the "Data" message
-  that completes it (memory writes it and → S).
-
-### 4.4 Stable-state FSM diagrams
-
-Draw these into `docs/fsm_cache.png` and `docs/fsm_memory.png`, matching Sorin Figures 7.4 and 7.5.
-Cache stable-state transitions (Figure 7.4):
-
-| From | Event | To |
-|---|---|---|
-| I | Own-GetS, memory in I (exclusive response) | E |
-| I | Own-GetS, memory not in I | S |
-| I | Own-GetM | M |
-| S | Own-GetM | M |
-| S | Other-GetM, or Replacement (silent) | I |
-| E | Store (silent) | M |
-| E | Other-GetS | S |
-| E | Other-GetM, or Own-PutM | I |
-| M | Other-GetS | S |
-| M | Other-GetM, or Own-PutM | I |
-
-Memory stable-state transitions (Figure 7.5): I → EorM on GetS or GetM; S → EorM on GetM;
-EorM → S on GetS; EorM → I on PutM (with Data or NoData-E).
+The full protocol (Sorin Tables 7.11 / 7.12, the MSI subset for Phase 2, the stable-state FSMs,
+the example execution and the invariants) lives in **`docs/protocol.md`**. It is part of this spec:
+signing off this file signs off that one too.
 
 ## 5. Core-side interface (traffic generator ↔ cache)
 
@@ -214,7 +139,7 @@ EorM → S on GetS; EorM → I on PutM (with Data or NoData-E).
 |---|---|---|---|
 | req_valid | in | 1 | Traffic generator has a request |
 | req_ready | out | 1 | Cache can accept a request this cycle |
-| req_op | in | 2 | **(proposed)** `op_t` enum: LD, ST (TAS added later; 2 bits leaves room) |
+| req_op | in | 2 | `op_t` in `mesi_pkg.sv`: OP_LD, OP_ST (OP_TAS reserved for stretch S2) |
 | req_addr | in | ADDR_W | Byte address, word-aligned |
 | req_wdata | in | WORD_W | Store data |
 | resp_valid | out | 1 | One-cycle pulse: request finished |
@@ -233,31 +158,66 @@ EorM → S on GetS; EorM → I on PutM (with Data or NoData-E).
 
 ## 6. Bus interface
 
+Port names below match `rtl/top.sv`. No tri-states: every cache drives its own `cache_*`
+outputs, and `bus.sv` muxes the granted cache's request onto the shared `bus_*` signals.
+
+### 6.1 Arbitration
+
 | Signal | Driver | Width | Meaning |
 |---|---|---|---|
 | bus_req[i] | cache i | N_CORES | Cache i wants the bus; held high until granted |
-| bus_gnt[i] | arbiter | N_CORES | One-hot; at most one bit set. Held until bus_done |
-| bus_cmd | granted cache | `bus_cmd_t` (2 bits) | NONE, GetS, GetM, PutM |
-| bus_addr | granted cache | ADDR_W | Line-aligned (low OFFSET_W bits = 0) |
-| put_kind | granted cache | `put_t` (2 bits) | For PutM only: DATA, NODATA, NODATA_E |
-| cache_dval[i] | cache i | N_CORES | Cache i (the owner) is driving its line onto the bus this cycle |
-| cache_data[i] | cache i | LINE_W each | Cache i's outgoing line (owner response, or PutM data) |
-| bus_data | mux in bus.sv | LINE_W | The line on the bus |
-| bus_data_valid | bus.sv | 1 | `bus_data` holds the data response this cycle |
-| bus_data_excl | bus.sv | 1 | The data response is exclusive (memory answered a GetS from state I) → requester installs E |
-| bus_done | bus.sv | 1 | Transaction complete; arbiter may grant next cycle |
+| bus_gnt[i] | arbiter | N_CORES | One-hot; at most one bit set. Registered, held until bus_done |
+
+### 6.2 Cache → bus.sv (one set per cache)
+
+| Signal | Width | Meaning |
+|---|---|---|
+| cache_cmd[i] | `bus_cmd_t` (2 bits) | CMD_NONE, CMD_GETS, CMD_GETM, CMD_PUTM. Only the granted cache's value is used |
+| cache_addr[i] | ADDR_W | Line-aligned (low OFFSET_W bits = 0) |
+| cache_put_kind[i] | `put_t` (2 bits) | For PutM only: PUT_DATA, PUT_NODATA, PUT_NODATA_E |
+| cache_dval[i] | 1 | Cache i is driving `cache_data[i]` this cycle (owner response, or its own PutM data) |
+| cache_data[i] | LINE_W | Cache i's outgoing line |
+
+### 6.3 Memory controller → bus.sv
+
+| Signal | Width | Meaning |
+|---|---|---|
+| mem_dval | 1 | Memory is driving `mem_data` this cycle |
+| mem_data | LINE_W | Memory's line |
+| mem_excl | 1 | Memory's response is exclusive (GetS to a block in I) |
+| mem_owned | 1 | The block on the bus is in EorM: a cache owns it and will supply the data, so memory stays silent. Valid from the address phase until bus_done |
+
+### 6.4 bus.sv → every cache and memory (broadcast)
+
+| Signal | Width | Meaning |
+|---|---|---|
+| bus_cmd | `bus_cmd_t` | The granted cache's `cache_cmd` (CMD_NONE when idle) |
+| bus_addr | ADDR_W | The granted cache's `cache_addr` |
+| bus_put_kind | `put_t` | The granted cache's `cache_put_kind` |
+| bus_addr_valid | 1 | **1-cycle pulse in the address phase (G+1).** This is the cycle of the Own-* event for the requester and the Other-* event for everyone else |
+| bus_snoop_end | 1 | **1-cycle pulse on the last snoop-window cycle (G+1+SNOOP_LAT).** Snoopers apply their state change at the end of this cycle |
+| bus_data | LINE_W | The line on the bus |
+| bus_data_valid | 1 | `bus_data` holds valid data this cycle |
+| bus_data_excl | 1 | The data response is exclusive → requester installs E |
+| bus_done | 1 | Transaction complete; the arbiter may grant next cycle |
 
 **Removed from the guide's interface:** `bus_shared` and `bus_owner` (the wired-ORs).
-Memory's per-block state replaces both: it decides E vs. S, and it knows whether a cache owner will respond.
+Memory's per-block state replaces both: it decides E vs. S (`mem_excl`), and it knows whether
+a cache owner will respond (`mem_owned`).
 
-- **Who drives `bus_data_valid`, `bus_data_excl`, `bus_done` (proposed):** the central sequencer in
-  `bus.sv`, which also holds memory's transient state (I^D / S^D / EorM^D) during a PutM.
-- **Data mux select (proposed):**
-  1. `bus_cmd == PutM` with `put_kind == DATA`: the **requester's** line (selected by `bus_gnt`).
-  2. GetS / GetM and memory's block state is **EorM**: the **owner cache's** line
-     (selected by `cache_dval`, which is one-hot because only one cache can be E or M).
-  3. GetS / GetM and memory's block state is **I or S**: **memory's** line.
-- **Requester ignoring its own transaction:** cache i only snoops when `bus_cmd != NONE` and
+**Why the phase strobes:** with `bus_addr_valid` and `bus_snoop_end` coming from one place
+(`bus.sv`), caches and memory don't each have to count cycles from the grant. If the timeline
+changes (e.g. SNOOP_LAT), only `bus.sv` changes.
+
+- **Who drives `bus_addr_valid`, `bus_snoop_end`, `bus_data_valid`, `bus_data_excl`, `bus_done`:**
+  the sequencer in `bus.sv`, which also holds memory's transient state (I^D / S^D / EorM^D) during a PutM.
+- **Data mux select:**
+  1. `bus_cmd == CMD_PUTM` with `bus_put_kind == PUT_DATA`: the **requester's** line (`cache_data[i]` of the granted cache).
+  2. GetS / GetM with `mem_owned == 1`: the **owner cache's** line (the cache whose `cache_dval` is high;
+     one-hot because only one cache can be E or M).
+  3. GetS / GetM with `mem_owned == 0`: **memory's** line (`mem_data` when `mem_dval`).
+- **`bus_data_excl`** = `mem_excl` when memory is the data source, else 0.
+- **Requester ignoring its own transaction:** cache i only snoops when `bus_addr_valid` is high and
   `bus_gnt[i] == 0`.
 
 ## 7. Transaction timeline
@@ -270,8 +230,8 @@ GetM from memory, GetM from an owner cache, PutM with Data / NoData-E / NoData.
 | Phase | Cycle(s) | What happens |
 |---|---|---|
 | Grant | G | Arbiter asserts `bus_gnt[i]` (registered output) |
-| Address | G+1 | Requester drives `bus_cmd`, `bus_addr` (and `put_kind` for PutM), held until bus_done. **This is the Own-* event** for the requester (e.g. IS^AD → IS^D). Memory reads its block state for `bus_addr` |
-| Snoop window | G+2, G+3 | Snoopers look up their tag array and `pend_addr`. At the end of G+3, they apply their Other-* transition from Table 7.11. An owner (E/M/MI^A/EI^A) copies its line into a flush register |
+| Address | G+1 | `bus_addr_valid` = 1. The granted cache's `cache_cmd` / `cache_addr` / `cache_put_kind` appear on `bus_cmd` / `bus_addr` / `bus_put_kind`, held until bus_done. **This is the Own-* event** for the requester (e.g. IS^AD → IS^D). Memory reads its block state and sets `mem_owned` |
+| Snoop window | G+2, G+3 | Snoopers look up their tag array and `pend_addr`. `bus_snoop_end` = 1 in G+3; at the end of G+3 snoopers apply their Other-* transition from Table 7.11. An owner (E/M/MI^A/EI^A) copies its line into a flush register |
 | Data, owner cache | G+4 | Owner drives `cache_dval` / `cache_data`. Memory captures it if the request was GetS |
 | Data, memory | G+1+MEM_LAT | Memory knows from its own state that it should respond, so it starts counting at the address phase. MEM_LAT ≥ 3 keeps this after the snoop window |
 | Data, PutM | G+4 | Requester sends Data, NoData-E or NoData. Memory updates per Table 7.12 |
@@ -313,3 +273,4 @@ GetM from memory, GetM from an owner cache, PutM with Data / NoData-E / NoData.
 |---|---|---|
 | | Initial draft | |
 | 2026-11-24 | Switched protocol to Sorin Tables 7.11 / 7.12: GetS/GetM/PutM, no BusUpgr, no shared/owner wires, per-block memory state, E is an owner and evicts with PutM, transient states listed | |
+| 2026-11-24 | Bus interface matched to `rtl/top.sv`: per-cache `cache_cmd` / `cache_addr` / `cache_put_kind` muxed by bus.sv; added `bus_addr_valid`, `bus_snoop_end`, `bus_put_kind`, and memory outputs `mem_dval` / `mem_data` / `mem_excl` / `mem_owned`. Enum names now match `mesi_pkg.sv` (ST_, TR_, MEM_, CMD_, PUT_, OP_ prefixes) | |
