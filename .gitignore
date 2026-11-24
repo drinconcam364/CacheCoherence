@@ -1,0 +1,37 @@
+# --- Simulation outputs ---
+obj_dir/
+*.vcd
+*.fst
+*.ghw
+*.wlf
+*.vpd
+*.fsdb
+*.ucdb
+*.vdb/
+csrc/
+simv*
+xsim.dir/
+work/
+transcript
+*.log
+*.jou
+*.pb
+
+# --- Regression results (commit summaries in docs/results.md instead) ---
+regress_out/
+sim_out/
+coverage_report/
+
+# --- Synthesis outputs (commit reports you want to keep under syn/reports/) ---
+syn/build/
+*.dcp
+*.bit
+.Xil/
+vivado*.str
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
